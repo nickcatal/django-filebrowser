@@ -12,7 +12,7 @@ from django.core.files import File
 
 
 # FILEBROWSER IMPORTS
-from filebrowser.settings import VERSIONS
+from filebrowser.settings import VERSIONS, PLACEHOLDER, SHOW_PLACEHOLDER, FORCE_PLACEHOLDER
 from filebrowser.base import FileObject
 from filebrowser.sites import get_default_site
 register = Library()
@@ -38,11 +38,13 @@ class VersionNode(Node):
         else:  # string
             source = source
         site = context.get('filebrowser_site', get_default_site())
+        if FORCE_PLACEHOLDER or (SHOW_PLACEHOLDER and not site.storage.isfile(source)):
+            source = PLACEHOLDER
         fileobject = FileObject(source, site=site)
         try:
             version = fileobject.version_generate(version_suffix)
             return version.url
-        except Exception, e:
+        except Exception as e:
             if settings.TEMPLATE_DEBUG:
                 raise e
         return ""
@@ -85,11 +87,13 @@ class VersionObjectNode(Node):
         else:  # string
             source = source
         site = context.get('filebrowser_site', get_default_site())
+        if FORCE_PLACEHOLDER or (SHOW_PLACEHOLDER and not site.storage.isfile(source)):
+            source = PLACEHOLDER
         fileobject = FileObject(source, site=site)
         try:
             version = fileobject.version_generate(version_suffix)
             context[self.var_name] = version
-        except Exception, e:
+        except Exception as e:
             if settings.TEMPLATE_DEBUG:
                 raise e
             context[self.var_name] = ""
@@ -142,9 +146,9 @@ def version_setting(parser, token):
     try:
         tag, version_suffix = token.split_contents()
     except:
-        raise TemplateSyntaxError, "%s tag requires 1 argument" % token.contents.split()[0]
+        raise TemplateSyntaxError("%s tag requires 1 argument" % token.contents.split()[0])
     if (version_suffix[0] == version_suffix[-1] and version_suffix[0] in ('"', "'")) and version_suffix.lower()[1:-1] not in VERSIONS:
-        raise TemplateSyntaxError, "%s tag received bad version_suffix %s" % (tag, version_suffix)
+        raise TemplateSyntaxError("%s tag received bad version_suffix %s" % (tag, version_suffix))
     return VersionSettingNode(version_suffix)
 
 

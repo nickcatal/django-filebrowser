@@ -13,7 +13,6 @@ from __future__ import with_statement
 import os
 import sys
 import shutil
-from urllib import urlencode
 from types import MethodType
 
 # DJANGO IMPORTS
@@ -21,8 +20,14 @@ from django.test import TestCase
 from django.test.client import Client
 from django.core.urlresolvers import get_resolver, get_urlconf, resolve, reverse
 from django.contrib.admin.templatetags.admin_static import static
+from django.test.utils import override_settings
+try:
+    from django.utils.six.moves.urllib.parse import urlencode
+except:
+    from django.utils.http import urlencode
 
 # FILEBROWSER IMPORTS
+import filebrowser.settings
 from filebrowser.settings import DIRECTORY, VERSIONS
 from filebrowser.base import FileObject
 from filebrowser.sites import get_site_dict
@@ -52,6 +57,26 @@ def test_browse(test):
     # Check directory was set correctly in the context. If this fails, it may indicate
     # that two sites were instantiated with the same name.
     test.assertTrue(test.site.directory == response.context['filebrowser_site'].directory)
+
+
+def test_ckeditor_params_in_search_form(test):
+    """
+    The CKEditor GET params must be included in the search form as hidden
+    inputs so they persist after searching.
+    """
+    url = reverse('%s:fb_browse' % test.site_name)
+    response = test.c.get(url, {
+        'pop': '3',
+        'type': 'image',
+        'CKEditor': 'id_body',
+        'CKEditorFuncNum': '1',
+    })
+
+    test.assertTrue(response.status_code == 200)
+    test.assertContains(response, '<input type="hidden" name="pop" value="3" />')
+    test.assertContains(response, '<input type="hidden" name="type" value="image" />')
+    test.assertContains(response, '<input type="hidden" name="CKEditor" value="id_body" />')
+    test.assertContains(response, '<input type="hidden" name="CKEditorFuncNum" value="1" />')
 
 
 def test_createdir(test):
@@ -117,6 +142,158 @@ def test_do_upload(test):
 
     # Check the file has the correct size
     test.assertTrue(file_size == test.site.storage.size(path))
+
+
+def test_overwrite(test):
+    """
+    Test the uploading with OVERWRITE_EXISTING
+    """
+
+    # Save settings
+    oe = filebrowser.sites.OVERWRITE_EXISTING
+
+    # OVERWRITE true
+    filebrowser.sites.OVERWRITE_EXISTING = True
+
+    url = reverse('%s:fb_do_upload' % test.site_name)
+    url = '?'.join([url, urlencode({'folder': test.tmpdir.path_relative_directory, 'qqfile': 'testimage.jpg'})])
+
+    with open(os.path.join(FILEBROWSER_PATH, 'static/filebrowser/img/testimage.jpg'), "rb") as f:
+        file_size = os.path.getsize(f.name)
+        response = test.c.post(url, data={'qqfile': 'testimage.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+
+    # Check files
+    test.assertEqual(test.site.storage.listdir(test.tmpdir), ([], [u'testimage.jpg']))
+
+    # OVERWRITE false
+    filebrowser.sites.OVERWRITE_EXISTING = False
+
+    url = reverse('%s:fb_do_upload' % test.site_name)
+    url = '?'.join([url, urlencode({'folder': test.tmpdir.path_relative_directory, 'qqfile': 'testimage.jpg'})])
+
+    with open(os.path.join(FILEBROWSER_PATH, 'static/filebrowser/img/testimage.jpg'), "rb") as f:
+        file_size = os.path.getsize(f.name)
+        response = test.c.post(url, data={'qqfile': 'testimage.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+
+    # Check files
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'testimage.jpg', u'testimage_1.jpg'])
+
+    # Reset settings
+    filebrowser.sites.OVERWRITE_EXISTING = oe
+
+
+def test_convert_normalize(test):
+    """
+    Test the uploading with CONVERT_FILENAME, NORMALIZE_FILENAME
+    """
+
+    url = reverse('%s:fb_do_upload' % test.site_name)
+    url = '?'.join([url, urlencode({'folder': test.tmpdir.path_relative_directory, 'qqfile': 'TEST IMAGE 000.jpg'})])
+    f = open(os.path.join(FILEBROWSER_PATH, u'static/filebrowser/img/TEST IMAGE 000.jpg'), "rb")
+
+    # Save settings
+    oe = filebrowser.sites.OVERWRITE_EXISTING
+    cf = filebrowser.sites.CONVERT_FILENAME
+    nf = filebrowser.sites.NORMALIZE_FILENAME
+
+    # Set CONVERT_FILENAME, NORMALIZE_FILENAME
+    filebrowser.sites.CONVERT_FILENAME = False
+    filebrowser.sites.NORMALIZE_FILENAME = False
+    filebrowser.utils.CONVERT_FILENAME = False
+    filebrowser.utils.NORMALIZE_FILENAME = False
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'TEST IMAGE 000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # OVERWRITE true
+    filebrowser.sites.OVERWRITE_EXISTING = True
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'TEST IMAGE 000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'TEST IMAGE 000_1.jpg')
+    test.assertFalse(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # OVERWRITE false
+    filebrowser.sites.OVERWRITE_EXISTING = False
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'TEST IMAGE 000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'TEST IMAGE 000_1.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # Set CONVERT_FILENAME, NORMALIZE_FILENAME
+    filebrowser.sites.CONVERT_FILENAME = True
+    filebrowser.sites.NORMALIZE_FILENAME = False
+    filebrowser.utils.CONVERT_FILENAME = True
+    filebrowser.utils.NORMALIZE_FILENAME = False
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'test_image_000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'test_image_000.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # OVERWRITE true
+    filebrowser.sites.OVERWRITE_EXISTING = True
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'test_image_000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_1.jpg')
+    test.assertFalse(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'test_image_000.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # OVERWRITE false
+    filebrowser.sites.OVERWRITE_EXISTING = False
+    response = test.c.post(url, data={'qqfile': 'TTEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'test_image_000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_1.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'test_image_000.jpg', u'test_image_000_1.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # Set CONVERT_FILENAME, NORMALIZE_FILENAME
+    filebrowser.sites.CONVERT_FILENAME = True
+    filebrowser.sites.NORMALIZE_FILENAME = True
+    filebrowser.utils.CONVERT_FILENAME = True
+    filebrowser.utils.NORMALIZE_FILENAME = True
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'test_image_000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'test_image_000.jpg', u'test_image_000_1.jpg', u'test_image_000_2.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # OVERWRITE true
+    filebrowser.sites.OVERWRITE_EXISTING = True
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'test_image_000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_1.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_2.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_3.jpg')
+    test.assertFalse(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'test_image_000.jpg', u'test_image_000_1.jpg', u'test_image_000_2.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # OVERWRITE false
+    filebrowser.sites.OVERWRITE_EXISTING = False
+    response = test.c.post(url, data={'qqfile': 'TEST IMAGE 000.jpg', 'file': f}, HTTP_X_REQUESTED_WITH='XMLHttpRequest')
+    path = os.path.join(test.tmpdir.path, 'test_image_000.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_1.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_2.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    path = os.path.join(test.tmpdir.path, 'test_image_000_3.jpg')
+    test.assertTrue(test.site.storage.exists(path))
+    test.assertEqual(sorted(test.site.storage.listdir(test.tmpdir)[1]), [u'TEST IMAGE 000.jpg', u'TEST IMAGE 000_1.jpg', u'test_image_000.jpg', u'test_image_000_1.jpg', u'test_image_000_2.jpg', u'test_image_000_3.jpg', u'testimage.jpg', u'testimage_1.jpg'])
+
+    # Reset settings
+    filebrowser.sites.CONVERT_FILENAME = cf
+    filebrowser.sites.NORMALIZE_FILENAME = nf
+    filebrowser.utils.CONVERT_FILENAME = cf
+    filebrowser.utils.NORMALIZE_FILENAME = nf
+    filebrowser.sites.OVERWRITE_EXISTING = oe
 
 
 def test_detail(test):
@@ -222,7 +399,7 @@ def setUp(self):
 def tearDown(self):
     # Delete a left-over tmp directories, if there's any
     if hasattr(self, 'tmpdir') and self.tmpdir:
-        print "Removing left-over tmp dir:", self.tmpdir.path
+        print("Removing left-over tmp dir:", self.tmpdir.path)
         self.site.storage.rmtree(self.tmpdir.path)
 
 
@@ -232,9 +409,12 @@ def runTest(self):
     self.assertTrue(response)
     # Execute tests
     test_browse(self)
+    test_ckeditor_params_in_search_form(self)
     test_createdir(self)
     test_upload(self)
     test_do_upload(self)
+    test_overwrite(self)
+    test_convert_normalize(self)
     test_detail(self)
     test_delete_confirm(self)
     test_delete(self)
@@ -248,13 +428,13 @@ this_module = sys.modules[__name__]
 
 ## Create a test class for each deployed filebrowser site
 for site in all_sites:
-    print 'Creating Test for the FileBrowser site:', site
+    print('Creating Test for the FileBrowser site:', site)
     # Create a subclass of TestCase
     testcase_class = type('TestSite_' + site, (TestCase,), {'site_name': site, 'c': Client(), 'tmpdirs': None})
     # Add setUp, tearDown, and runTest methods
-    setattr(testcase_class, 'setUp', MethodType(setUp, None, testcase_class))
-    setattr(testcase_class, 'tearDown', MethodType(tearDown, None, testcase_class))
-    setattr(testcase_class, 'runTest', MethodType(runTest, None, testcase_class))
+    setattr(testcase_class, 'setUp', setUp)
+    setattr(testcase_class, 'tearDown', tearDown)
+    setattr(testcase_class, 'runTest', runTest)
     # Add the test case class to this module
     setattr(this_module, 'TestSite_' + site, testcase_class)
 

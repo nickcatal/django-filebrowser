@@ -8,8 +8,29 @@
 Changelog
 =========
 
-3.5.4 (not yet released)
+3.5.7 (not yet released)
 ------------------------
+
+3.5.6 (April 16th, 2014)
+------------------------
+
+* Fixed: Displaying pagination correctly with lots of entries.
+
+3.5.5 (April 13th, 2014)
+------------------------
+
+* New: Added client-side (JavaScript) file extension validation to the AJAX uploader.
+* New: Added experimental Python 3.3 support.
+* Improved: Tests with convert/normalize (removed special chars from test filename).
+* Fixed: File selection after using search box (CKEditor).
+* Fixed: Removed encoding of file URIs with CKEditor.
+
+3.5.4 (February 21st, 2014)
+---------------------------
+
+* Fixed: Placeholder functionality (including tests).
+* Fixed: Convert/normalize filenames (including tests).
+* Fixed: Handling uppercase extensions with browse.
 
 3.5.3 (January 7, 2014)
 -----------------------
@@ -76,7 +97,7 @@ Changelog
 -----------------
 
 * Fixed security bug: added staff_member_required decorator to the upload-function.
-* Fixed a XSS vulnerability with fb_tags. 
+* Fixed a XSS vulnerability with fb_tags.
 
 3.4.1 (7.3.2012)
 ----------------

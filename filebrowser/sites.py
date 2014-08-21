@@ -24,11 +24,14 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.files.storage import DefaultStorage, default_storage, FileSystemStorage
 
 # FILEBROWSER IMPORTS
-from filebrowser.settings import *
+from filebrowser.settings import STRICT_PIL, DIRECTORY, EXTENSIONS, SELECT_FORMATS, ADMIN_VERSIONS, ADMIN_THUMBNAIL, MAX_UPLOAD_SIZE,\
+    NORMALIZE_FILENAME, CONVERT_FILENAME, SEARCH_TRAVERSE, EXCLUDE, VERSIONS, EXTENSION_LIST, DEFAULT_SORTING_BY, DEFAULT_SORTING_ORDER,\
+    LIST_PER_PAGE, OVERWRITE_EXISTING
 from filebrowser.templatetags.fb_tags import query_helper
 from filebrowser.base import FileListing, FileObject
 from filebrowser.decorators import path_exists, file_exists
 from filebrowser.storage import FileSystemStorageMixin, StorageMixin
+from filebrowser.utils import convert_filename
 from filebrowser import signals
 
 # Add some required methods to FileSystemStorage
@@ -64,7 +67,7 @@ def get_site_dict(app_name='filebrowser'):
     # Get names of all deployed filebrowser sites with a give app_name
     deployed = get_resolver(get_urlconf()).app_dict[app_name]
     # Get the deployed subset from the cache
-    return dict((k, v) for k, v in _sites_cache[app_name].iteritems() if k in deployed)
+    return dict((k, v) for k, v in _sites_cache[app_name].items() if k in deployed)
 
 
 def register_site(app_name, site_name, site):
@@ -162,7 +165,7 @@ def handle_file_upload(path, file, site):
     try:
         file_path = os.path.join(path, file.name)
         uploadedfile = site.storage.save(file_path, file)
-    except Exception, inst:
+    except Exception as inst:
         raise inst
     return uploadedfile
 
@@ -266,7 +269,7 @@ class FileBrowserSite(object):
         Get all the enabled actions as a list of (name, func). The list
         is sorted alphabetically by actions names
         """
-        res = self._actions.items()
+        res = list(self._actions.items())
         res.sort(key=lambda name_func: name_func[0])
         return res
 
@@ -280,7 +283,7 @@ class FileBrowserSite(object):
         filter_re = []
         for exp in EXCLUDE:
             filter_re.append(re.compile(exp))
-        for k, v in VERSIONS.iteritems():
+        for k, v in VERSIONS.items():
             exp = (r'_%s(%s)$') % (k, '|'.join(EXTENSION_LIST))
             filter_re.append(re.compile(exp, re.IGNORECASE))
 
@@ -369,7 +372,8 @@ class FileBrowserSite(object):
                     messages.add_message(request, messages.SUCCESS, _('The Folder %s was successfully created.') % form.cleaned_data['name'])
                     redirect_url = reverse("filebrowser:fb_browse", current_app=self.name) + query_helper(query, "ot=desc,o=date", "ot,o,filter_type,filter_date,q,p")
                     return HttpResponseRedirect(redirect_url)
-                except OSError, (errno, strerror):
+                except OSError as e:
+                    errno = e.args[0]
                     if errno == 13:
                         form.errors['name'] = forms.util.ErrorList([_('Permission denied.')])
                     else:
@@ -446,7 +450,7 @@ class FileBrowserSite(object):
                 fileobject.delete()
                 signals.filebrowser_post_delete.send(sender=request, path=fileobject.path, name=fileobject.filename, site=self)
                 messages.add_message(request, messages.SUCCESS, _('Successfully deleted %s') % fileobject.filename)
-            except OSError, (errno, strerror):
+            except OSError:
                 # TODO: define error-message
                 pass
         redirect_url = reverse("filebrowser:fb_browse", current_app=self.name) + query_helper(query, "", "filename,filetype")
@@ -490,7 +494,7 @@ class FileBrowserSite(object):
                     else:
                         redirect_url = reverse("filebrowser:fb_browse", current_app=self.name) + query_helper(query, "", "filename")
                     return HttpResponseRedirect(redirect_url)
-                except OSError, (errno, strerror):
+                except OSError:
                     form.errors['name'] = forms.util.ErrorList([_('Error.')])
         else:
             form = ChangeForm(initial={"name": fileobject.filename}, path=path, fileobject=fileobject, filebrowser_site=self)
@@ -534,25 +538,29 @@ class FileBrowserSite(object):
             if len(request.FILES) > 1:
                 return HttpResponseBadRequest('Invalid request! Multiple files included.')
 
-            filedata = request.FILES.values()[0]
+            filedata = list(request.FILES.values())[0]
 
             fb_uploadurl_re = re.compile(r'^.*(%s)' % reverse("filebrowser:fb_upload", current_app=self.name))
             folder = fb_uploadurl_re.sub('', folder)
 
             path = os.path.join(self.directory, folder)
-            file_name = os.path.join(path, filedata.name)
-            file_already_exists = self.storage.exists(file_name)
+            # we convert the filename before uploading in order
+            # to check for existing files/folders
+            file_name = convert_filename(filedata.name)
+            filedata.name = file_name
+            file_path = os.path.join(path, file_name)
+            file_already_exists = self.storage.exists(file_path)
 
             # Check for name collision with a directory
-            if file_already_exists and self.storage.isdir(file_name):
-                ret_json = {'success': False, 'filename': filedata.name}
+            if file_already_exists and self.storage.isdir(file_path):
+                ret_json = {'success': False, 'filename': file_name}
                 return HttpResponse(json.dumps(ret_json))
 
             signals.filebrowser_pre_upload.send(sender=request, path=folder, file=filedata, site=self)
             uploadedfile = handle_file_upload(path, filedata, site=self)
 
             if file_already_exists and OVERWRITE_EXISTING:
-                old_file = smart_text(file_name)
+                old_file = smart_text(file_path)
                 new_file = smart_text(uploadedfile)
                 self.storage.move(new_file, old_file, allow_overwrite=True)
             else:
@@ -562,7 +570,7 @@ class FileBrowserSite(object):
             signals.filebrowser_post_upload.send(sender=request, path=folder, file=FileObject(smart_text(file_name), site=self), site=self)
 
             # let Ajax Upload know whether we saved it or not
-            ret_json = {'success': True, 'filename': filedata.name}
+            ret_json = {'success': True, 'filename': file_name}
             return HttpResponse(json.dumps(ret_json))
 
 storage = DefaultStorage()
